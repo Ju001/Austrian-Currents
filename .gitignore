@@ -14,5 +14,9 @@ dist/
 .env.local
 *.local
 
+# wrangler — contains KV namespace IDs specific to your Cloudflare account
+# copy wrangler.toml.example → wrangler.toml and fill in your IDs
+wrangler.toml
+
 # large raw datasets — download locally via prep scripts
 data/raw/

@@ -1,0 +1,11 @@
+name = "austrian-currents"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = "dist"
+
+# After deploying, create the KV namespace and fill in the IDs:
+#   wrangler kv namespace create GENERATION_CACHE
+#   wrangler kv namespace create GENERATION_CACHE --preview
+[[kv_namespaces]]
+binding = "GENERATION_CACHE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
