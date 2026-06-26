@@ -1,0 +1,18 @@
+plans/
+.claude/
+CLAUDE.md
+
+# dependencies
+node_modules/
+
+# build output
+dist/
+.wrangler/
+
+# env / secrets
+.env
+.env.local
+*.local
+
+# large raw datasets — download locally via prep scripts
+data/raw/
