@@ -84,7 +84,7 @@ const DYE_STRENGTH = 1.0; // paint toward the full pure fuel colour
 const SPLAT_FADE_MS = 800; // emitter lifetime: dye eases in then out (no pop)
 const BG_FORCE = 0.001; // permanent rotational body force (tangential UV/s)
 const BG_CENTER: [number, number] = [0.5, 0.5]; // gyre centre in sim UV
-const BORDER_BAND = 0.08; // free-slip band width just inside the border (SDF units)
+const BORDER_BAND = 0.05; // free-slip band width just inside the border (SDF units)
 
 // ── Main fluid renderer ───────────────────────────────────────────────────────
 
