@@ -195,31 +195,64 @@ uniform vec4  u_value;     // colour (paint) or velocity impulse (add)
 uniform float u_clampMin;  // dye: 0.0   velocity: -1e9 (effectively no clamp)
 uniform float u_clampMax;  // dye: 1.0   velocity:  1e9
 uniform float u_paint;     // 0 = additive (velocity), 1 = paint/replace (dye)
+uniform float u_opacity;   // dt-scaled paint rate (dye); 1.0 for velocity
 void main() {
   vec4  base     = texture2D(u_target, v_uv);
   vec2  d        = v_uv - u_point;
   float strength = exp(-dot(d, d) / (u_radius * u_radius));
   // Velocity ADDS (jets accumulate momentum). Dye PAINTS — it replaces toward the
-  // pure colour, so overlapping splats never sum hues into white.
+  // pure colour, so overlapping splats never sum hues into white. u_opacity scales
+  // the paint rate so the per-frame mix is framerate-independent.
   vec4  added    = base + strength * u_value;
-  vec4  painted  = mix(base, u_value, strength);
+  vec4  painted  = mix(base, u_value, strength * u_opacity);
   vec4  result   = mix(added, painted, u_paint);
   // Clamp only constrains dye to [0,1]; velocity passes a wide range so its
   // negative / large components survive (otherwise the flow field collapses).
   gl_FragColor   = clamp(result, u_clampMin, u_clampMax);
 }`.trim();
 
+// ── Separable Gaussian blur (9-tap). Run once per axis. ───────────────────
+// u_step is the per-tap offset along one axis (texel size × spread).
+export const BLUR = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+uniform vec2 u_step;
+void main() {
+  vec4 sum = texture2D(u_tex, v_uv) * 0.227027;
+  sum += (texture2D(u_tex, v_uv + u_step) + texture2D(u_tex, v_uv - u_step)) * 0.1945946;
+  sum += (texture2D(u_tex, v_uv + 2.0*u_step) + texture2D(u_tex, v_uv - 2.0*u_step)) * 0.1216216;
+  sum += (texture2D(u_tex, v_uv + 3.0*u_step) + texture2D(u_tex, v_uv - 3.0*u_step)) * 0.054054;
+  sum += (texture2D(u_tex, v_uv + 4.0*u_step) + texture2D(u_tex, v_uv - 4.0*u_step)) * 0.016216;
+  gl_FragColor = sum;
+}`.trim();
+
+// ── Bloom bright-pass: keep only the part of each colour above a threshold ─
+export const BLOOM_PREFILTER = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_threshold;
+void main() {
+  vec3 c = max(texture2D(u_tex, v_uv).rgb, vec3(0.0));
+  float b = max(max(c.r, c.g), c.b);
+  float k = max(b - u_threshold, 0.0) / max(b, 1e-4);
+  gl_FragColor = vec4(c * k, 1.0);
+}`.trim();
+
 // ── Display dye texture mapped through Mercator viewport corners ──────────
 export const DISPLAY = `
 precision highp float;
 varying vec2 v_uv;   // not used (we use gl_FragCoord)
-uniform sampler2D u_dye;
+uniform sampler2D u_dye;     // blurred dye (soft borders)
+uniform sampler2D u_bloom;   // blurred bright-pass (glow)
 uniform vec2 u_resolution;
 uniform vec2 u_tl, u_tr, u_bl, u_br;  // viewport Mercator corners
 uniform vec2 u_origin;   // simulation domain Mercator origin
 uniform vec2 u_scale;    // simulation domain Mercator size
-uniform float u_saturation; // >1 deepens hue against wash-out
-uniform float u_brightness; // >1 lifts faded dye back to vivid
+uniform float u_saturation;    // >1 deepens hue against wash-out
+uniform float u_brightness;    // >1 lifts faded dye back to vivid
+uniform float u_bloomStrength; // glow intensity
 
 void main() {
   float nx  =       gl_FragCoord.x / u_resolution.x;
@@ -241,6 +274,10 @@ void main() {
   float luma = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(vec3(luma), col, u_saturation);          // re-saturate
   col = clamp(col * u_brightness, 0.0, 1.0);          // re-energise
+
+  // Add bloom glow (blurred bright-pass), spreads a soft halo beyond the dye.
+  vec3 bloom = max(texture2D(u_bloom, simUV).rgb, vec3(0.0));
+  col = clamp(col + bloom * u_bloomStrength, 0.0, 1.0);
 
   // Alpha tracks dye brightness so empty regions are transparent (map shows through).
   // MapLibre uses premultiplied alpha blending (gl.ONE, gl.ONE_MINUS_SRC_ALPHA),

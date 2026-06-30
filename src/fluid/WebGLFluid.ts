@@ -11,6 +11,8 @@ import {
   BOUNDARY_VELOCITY,
   BOUNDARY_DYE,
   SPLAT,
+  BLUR,
+  BLOOM_PREFILTER,
   DISPLAY,
 } from "./shaders";
 
@@ -81,7 +83,13 @@ const DISPLAY_BRIGHTNESS = 1.25; // >1 lifts faded dye back toward vivid
 const SPLAT_RADIUS = 0.035; // larger blobs so each refresh is visible and spreads
 const SPLAT_FORCE = 0.3; // directional velocity impulse per splat (UV/s)
 const DYE_STRENGTH = 1.0; // paint toward the full pure fuel colour
+const PAINT_RATE = 0.6; // per-60fps-frame dye paint convergence (dt-scaled at runtime)
 const SPLAT_FADE_MS = 800; // emitter lifetime: dye eases in then out (no pop)
+const REF_FPS = 60; // reference framerate the decay/paint constants are tuned at
+const BLUR_SPREAD = 1.5; // texel spacing of the soft-border blur taps
+const BLOOM_THRESHOLD = 0.45; // brightness above which dye contributes to bloom
+const BLOOM_SPREAD = 4.0; // texel spacing of the wide bloom blur taps
+const BLOOM_STRENGTH = 0.8; // glow intensity added at display
 const BG_FORCE = 0.001; // permanent rotational body force (tangential UV/s)
 const BG_CENTER: [number, number] = [0.5, 0.5]; // gyre centre in sim UV
 const BORDER_BAND = 0.05; // free-slip band width just inside the border (SDF units)
@@ -102,6 +110,8 @@ export class WebGLFluid {
   private readonly pBoundaryVel: WebGLProgram;
   private readonly pBoundaryDye: WebGLProgram;
   private readonly pSplat: WebGLProgram;
+  private readonly pBlur: WebGLProgram;
+  private readonly pBloomPre: WebGLProgram;
   private readonly pDisplay: WebGLProgram;
 
   // FBOs
@@ -110,6 +120,10 @@ export class WebGLFluid {
   private readonly divergence: FBO;
   private readonly dye: DoubleFBO;
   private readonly vorticity: FBO;
+  // Post-processing scratch (blur ping-pong + final bloom), all sim-resolution.
+  private readonly ppA: FBO;
+  private readonly ppB: FBO;
+  private readonly bloomTex: FBO;
 
   // Geometry
   private readonly quad: WebGLBuffer;
@@ -190,6 +204,8 @@ export class WebGLFluid {
     this.pBoundaryVel = link(gl, VERT, BOUNDARY_VELOCITY);
     this.pBoundaryDye = link(gl, VERT, BOUNDARY_DYE);
     this.pSplat = link(gl, VERT, SPLAT);
+    this.pBlur = link(gl, VERT, BLUR);
+    this.pBloomPre = link(gl, VERT, BLOOM_PREFILTER);
     this.pDisplay = link(gl, VERT, DISPLAY);
 
     this.quad = gl.createBuffer()!;
@@ -206,6 +222,9 @@ export class WebGLFluid {
     this.divergence = this.makeSingle();
     this.dye = this.makeDouble();
     this.vorticity = this.makeSingle();
+    this.ppA = this.makeFBO(this.makeTex(gl.LINEAR));
+    this.ppB = this.makeFBO(this.makeTex(gl.LINEAR));
+    this.bloomTex = this.makeFBO(this.makeTex(gl.LINEAR));
 
     // RGBA16F textures are NOT guaranteed to be zero-initialised by the driver.
     // Garbage values in the dye FBO would appear as immediate white on first render.
@@ -219,6 +238,9 @@ export class WebGLFluid {
       this.dye.write,
       this.divergence,
       this.vorticity,
+      this.ppA,
+      this.ppB,
+      this.bloomTex,
     ].forEach((fbo) => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fbo);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -371,7 +393,7 @@ export class WebGLFluid {
     }
 
     // Paint each active emitter's dye for this frame (and fire its jet at birth).
-    this.updateEmitters(timeMs);
+    this.updateEmitters(timeMs, dt);
 
     // ── Simulation step ────────────────────────────────────────────────────
     this.computeVorticity();
@@ -387,6 +409,9 @@ export class WebGLFluid {
     this.applyVelocityBoundary();
     this.advectDye(dt);
     this.applyDyeBoundary();
+
+    // ── Post-process (blur + bloom) while still bound to the sim FBOs ───────
+    this.postProcess();
 
     // ── Display ────────────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, prevFBO);
@@ -411,6 +436,8 @@ export class WebGLFluid {
       this.pBoundaryVel,
       this.pBoundaryDye,
       this.pSplat,
+      this.pBlur,
+      this.pBloomPre,
       this.pDisplay,
     ].forEach((p) => gl.deleteProgram(p));
     gl.deleteBuffer(this.quad);
@@ -421,10 +448,12 @@ export class WebGLFluid {
       gl.deleteTexture(d.write.tex);
       gl.deleteFramebuffer(d.write.fbo);
     });
-    [this.divergence, this.vorticity].forEach((s) => {
-      gl.deleteTexture(s.tex);
-      gl.deleteFramebuffer(s.fbo);
-    });
+    [this.divergence, this.vorticity, this.ppA, this.ppB, this.bloomTex].forEach(
+      (s) => {
+        gl.deleteTexture(s.tex);
+        gl.deleteFramebuffer(s.fbo);
+      },
+    );
   }
 
   // ── Texture / FBO helpers ────────────────────────────────────────────────
@@ -525,7 +554,11 @@ export class WebGLFluid {
     this.bindTex(p, "u_velocity", this.velocity.read.tex, 0);
     this.bindTex(p, "u_source", this.velocity.read.tex, 1);
     gl.uniform1f(gl.getUniformLocation(p, "u_dt"), dt);
-    gl.uniform1f(gl.getUniformLocation(p, "u_dissipation"), VELOCITY_DISS);
+    // dt-scaled so the per-second decay is the same at any framerate.
+    gl.uniform1f(
+      gl.getUniformLocation(p, "u_dissipation"),
+      Math.pow(VELOCITY_DISS, dt * REF_FPS),
+    );
     this.drawTo(this.velocity.write);
     this.velocity.swap();
   }
@@ -537,7 +570,11 @@ export class WebGLFluid {
     this.bindTex(p, "u_velocity", this.velocity.read.tex, 0);
     this.bindTex(p, "u_source", this.dye.read.tex, 1);
     gl.uniform1f(gl.getUniformLocation(p, "u_dt"), dt);
-    gl.uniform1f(gl.getUniformLocation(p, "u_dissipation"), DYE_DISS);
+    // dt-scaled so the per-second fade is the same at any framerate.
+    gl.uniform1f(
+      gl.getUniformLocation(p, "u_dissipation"),
+      Math.pow(DYE_DISS, dt * REF_FPS),
+    );
     this.drawTo(this.dye.write);
     this.dye.swap();
   }
@@ -644,11 +681,47 @@ export class WebGLFluid {
     this.dye.swap();
   }
 
+  /**
+   * Post-process the dye into the display textures (all sim-resolution):
+   *   ppB  = Gaussian-blurred dye      (soft borders)
+   *   ppA  = blurred bright-pass       (bloom / glow)
+   * bloomTex is scratch for the separable bloom blur.
+   */
+  private postProcess(): void {
+    this.gl.viewport(0, 0, SIM_W, SIM_H);
+    // Soft-border blur of the dye → ppB (horizontal then vertical).
+    this.blur(this.dye.read.tex, this.ppA, BLUR_SPREAD, 0);
+    this.blur(this.ppA.tex, this.ppB, 0, BLUR_SPREAD);
+    // Bloom: bright-pass of the soft dye, then a wide separable blur → ppA.
+    this.prefilter(this.ppB.tex, this.ppA);
+    this.blur(this.ppA.tex, this.bloomTex, BLOOM_SPREAD, 0);
+    this.blur(this.bloomTex.tex, this.ppA, 0, BLOOM_SPREAD);
+  }
+
+  private blur(srcTex: WebGLTexture, dst: FBO, sx: number, sy: number): void {
+    const { gl } = this;
+    const p = this.pBlur;
+    this.use(p);
+    this.bindTex(p, "u_tex", srcTex, 0);
+    gl.uniform2f(gl.getUniformLocation(p, "u_step"), sx / SIM_W, sy / SIM_H);
+    this.drawTo(dst);
+  }
+
+  private prefilter(srcTex: WebGLTexture, dst: FBO): void {
+    const { gl } = this;
+    const p = this.pBloomPre;
+    this.use(p);
+    this.bindTex(p, "u_tex", srcTex, 0);
+    gl.uniform1f(gl.getUniformLocation(p, "u_threshold"), BLOOM_THRESHOLD);
+    this.drawTo(dst);
+  }
+
   private drawDisplay(w: number, h: number): void {
     const { gl } = this;
     const p = this.pDisplay;
     this.use(p);
-    this.bindTex(p, "u_dye", this.dye.read.tex, 0);
+    this.bindTex(p, "u_dye", this.ppB.tex, 0); // blurred (soft) dye
+    this.bindTex(p, "u_bloom", this.ppA.tex, 1); // bloom glow
     gl.uniform2f(gl.getUniformLocation(p, "u_resolution"), w, h);
     gl.uniform2fv(gl.getUniformLocation(p, "u_tl"), this.tl);
     gl.uniform2fv(gl.getUniformLocation(p, "u_tr"), this.tr);
@@ -658,6 +731,7 @@ export class WebGLFluid {
     gl.uniform2fv(gl.getUniformLocation(p, "u_scale"), this.sdfScale);
     gl.uniform1f(gl.getUniformLocation(p, "u_saturation"), DISPLAY_SATURATION);
     gl.uniform1f(gl.getUniformLocation(p, "u_brightness"), DISPLAY_BRIGHTNESS);
+    gl.uniform1f(gl.getUniformLocation(p, "u_bloomStrength"), BLOOM_STRENGTH);
     // Draw directly into the currently-bound FBO — caller has already restored
     // MapLibre's framebuffer. Never bind null here: MapLibre may be rendering
     // into its own FBO, and null would miss it entirely.
@@ -694,7 +768,9 @@ export class WebGLFluid {
    * (at birth) and paints its dye with a sine envelope (0 → 1 → 0) over its
    * lifetime, so the colour fades in and recedes organically instead of popping.
    */
-  private updateEmitters(timeMs: number): void {
+  private updateEmitters(timeMs: number, dt: number): void {
+    // Framerate-independent paint convergence: same approach-rate per real second.
+    const paintOp = 1 - Math.pow(1 - PAINT_RATE, dt * REF_FPS);
     for (let i = this.emitters.length - 1; i >= 0; i--) {
       const e = this.emitters[i];
       const age = (timeMs - e.bornMs) / SPLAT_FADE_MS;
@@ -716,6 +792,7 @@ export class WebGLFluid {
           -1e9,
           1e9,
           0,
+          1,
         );
       }
 
@@ -731,6 +808,7 @@ export class WebGLFluid {
         0,
         1,
         1,
+        paintOp,
       );
     }
   }
@@ -744,6 +822,7 @@ export class WebGLFluid {
     clampMin: number,
     clampMax: number,
     paint: number,
+    opacity: number,
   ): void {
     const { gl } = this;
     gl.viewport(0, 0, SIM_W, SIM_H);
@@ -756,6 +835,7 @@ export class WebGLFluid {
     gl.uniform1f(gl.getUniformLocation(p, "u_clampMin"), clampMin);
     gl.uniform1f(gl.getUniformLocation(p, "u_clampMax"), clampMax);
     gl.uniform1f(gl.getUniformLocation(p, "u_paint"), paint);
+    gl.uniform1f(gl.getUniformLocation(p, "u_opacity"), opacity);
     this.drawTo(dfbo.write);
     dfbo.swap();
   }
