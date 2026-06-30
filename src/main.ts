@@ -39,7 +39,7 @@ fetch('/austria-mask.geojson')
   .then(r => r.json())
   .then((mask: { geometry: { coordinates: [number, number][][] } }) => {
     const ring = mask.geometry.coordinates[1] as [number, number][];
-    const sdf  = buildSDF(ring, 256);
+    const sdf  = buildSDF(ring, 512); // 512² → smoother national border edge
     fluidLayer.setSDF(sdf);
   })
   .catch(err => console.error('SDF build failed:', err));

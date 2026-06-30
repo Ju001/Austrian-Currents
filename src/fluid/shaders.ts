@@ -114,19 +114,74 @@ void main() {
   gl_FragColor = vec4(clamp(vel, -3.0, 3.0), 0.0, 1.0);
 }`.trim();
 
-// ── Zero velocity outside Austria (no-slip wall via SDF) ──────────────────
+// ── Permanent background gyre: a tangential body force on the velocity ────
+// Keeps the basin sloshing in a slow circle even after splat jets decay.
+// The force is perpendicular to (uv - centre), divided by radius (clamped near
+// the centre) so the tangential speed is roughly constant rather than blowing
+// up at the rim. A divergence-free field, so the pressure projection preserves it.
+export const FORCE = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_velocity;
+uniform vec2  u_center;
+uniform float u_strength;
+uniform float u_dt;
+void main() {
+  vec2 vel = texture2D(u_velocity, v_uv).xy;
+  vec2 d   = v_uv - u_center;
+  vec2 tangent = vec2(-d.y, d.x) / max(length(d), 0.15);
+  vel += tangent * u_strength * u_dt;
+  gl_FragColor = vec4(vel, 0.0, 1.0);
+}`.trim();
+
+// ── Free-slip velocity wall at Austria's border (mass-conserving) ─────────
 // sdfUV == simUV because both span the same Mercator bounding box.
-export const BOUNDARY = `
+// SDF .r = normalised distance: 0 at the border AND outside, increasing inward,
+// so ∇d is the inward normal. We keep fluid *inside* the country by cancelling
+// only the OUTWARD-normal velocity component in a band just inside the border —
+// the fluid slides along the outline instead of crossing it. Strictly outside
+// (d≈0) is a solid wall with zero flow.
+export const BOUNDARY_VELOCITY = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_velocity;
+uniform sampler2D u_sdf;
+uniform vec2  u_texelSize;
+uniform float u_band;     // border band width in SDF (distance) units
+void main() {
+  float d   = texture2D(u_sdf, v_uv).r;
+  vec2  vel = texture2D(u_velocity, v_uv).xy;
+
+  if (d <= 0.0001) {                 // border / outside → solid, no flow
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  if (d < u_band) {                  // inner band → free-slip
+    float dl = texture2D(u_sdf, v_uv - vec2(u_texelSize.x, 0.0)).r;
+    float dr = texture2D(u_sdf, v_uv + vec2(u_texelSize.x, 0.0)).r;
+    float db = texture2D(u_sdf, v_uv - vec2(0.0, u_texelSize.y)).r;
+    float dt = texture2D(u_sdf, v_uv + vec2(0.0, u_texelSize.y)).r;
+    vec2  n  = normalize(vec2(dr - dl, dt - db) + vec2(1e-6)); // inward normal
+    vec2  outward = -n;
+    float vOut = dot(vel, outward);
+    if (vOut > 0.0) vel -= vOut * outward;   // remove flow leaving the country
+  }
+  gl_FragColor = vec4(vel, 0.0, 1.0);
+}`.trim();
+
+// ── Dye clip: zero ONLY strictly outside the border ──────────────────────
+// No soft-band attenuation, so interior dye is never eroded frame-to-frame —
+// the total amount of each colour is conserved (the velocity wall keeps it in).
+export const BOUNDARY_DYE = `
 precision highp float;
 varying vec2 v_uv;
 uniform sampler2D u_field;
 uniform sampler2D u_sdf;
-uniform float u_scale;   // field multiplier outside: 0 for velocity, 0 for dye
 void main() {
-  float d    = texture2D(u_sdf, v_uv).r;
-  float mask = smoothstep(0.0, 0.015, d);
-  vec4  val  = texture2D(u_field, v_uv);
-  gl_FragColor = mix(vec4(0.0, 0.0, 0.0, val.a), val, mask);
+  float d   = texture2D(u_sdf, v_uv).r;
+  vec4  val = texture2D(u_field, v_uv);
+  float inside = step(0.0001, d);    // 1 inside, 0 strictly outside
+  gl_FragColor = vec4(val.rgb * inside, val.a);
 }`.trim();
 
 // ── Inject a Gaussian blob (dye or velocity impulse) ─────────────────────
