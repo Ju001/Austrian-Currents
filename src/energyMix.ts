@@ -2,38 +2,45 @@
 const B_CODE: Record<string, string> = {
   B01: 'Biomass',
   B02: 'Lignite',
-  B03: 'Fossil Peat',
+  B03: 'Coal Gas',
   B04: 'Gas',
   B05: 'Hard Coal',
   B06: 'Oil',
+  B07: 'Oil Shale',
+  B08: 'Peat',
   B09: 'Geothermal',
-  B10: 'Hydro',
+  B10: 'Pumped Storage',
   B11: 'Hydro',
-  B12: 'Pumped Storage',
+  B12: 'Hydro',
   B13: 'Marine',
   B14: 'Nuclear',
-  B15: 'Other',
+  B15: 'Other Renewable',
   B16: 'Solar',
-  B17: 'Shale',
-  B18: 'Wind',
-  B19: 'Wind Offshore',
-  B20: 'Waste',
+  B17: 'Waste',
+  B18: 'Wind Offshore',
+  B19: 'Wind',
+  B20: 'Other',
+  B25: 'Energy Storage',
 };
 
 // Display colors per fuel — passed as [r,g,b] in 0-1 HDR space for glow
 export const FUEL_COLORS: Record<string, [number, number, number]> = {
-  Hydro:           [0.05, 0.55, 1.00],
-  'Pumped Storage':[0.45, 0.20, 1.00],
-  Wind:            [0.10, 0.90, 0.95],
-  Solar:           [1.00, 0.82, 0.05],
-  Gas:             [1.00, 0.40, 0.10],
-  Biomass:         [0.25, 0.85, 0.15],
-  Nuclear:         [0.15, 1.00, 0.55],
-  Coal:            [0.55, 0.35, 0.20],
-  Lignite:         [0.50, 0.30, 0.15],
-  Oil:             [0.70, 0.55, 0.30],
-  Waste:           [0.60, 0.50, 0.30],
-  Other:           [0.40, 0.45, 0.55],
+  Hydro:            [0.05, 0.55, 1.00],
+  'Pumped Storage': [0.45, 0.20, 1.00],
+  Wind:             [0.10, 0.90, 0.95],
+  'Wind Offshore':  [0.10, 0.90, 0.95],
+  Solar:            [1.00, 0.82, 0.05],
+  Gas:              [1.00, 0.40, 0.10],
+  Biomass:          [0.25, 0.85, 0.15],
+  Nuclear:          [0.15, 1.00, 0.55],
+  'Hard Coal':      [0.55, 0.35, 0.20],
+  Lignite:          [0.50, 0.30, 0.15],
+  Oil:              [0.70, 0.55, 0.30],
+  'Oil Shale':      [0.65, 0.50, 0.25],
+  Waste:            [0.60, 0.50, 0.30],
+  'Other Renewable':[0.30, 0.70, 0.40],
+  Other:            [0.40, 0.45, 0.55],
+  'Energy Storage': [0.50, 0.25, 0.90],
 };
 
 export interface FuelEntry {
@@ -70,8 +77,12 @@ function parseMix(raw: RawMix): FuelEntry[] {
     .sort((a, b) => b.mw - a.mw);
 }
 
-export async function fetchMix(url = '/mock/mock_generation.json'): Promise<FuelEntry[]> {
-  const res = await fetch(url);
+export async function fetchMix(url = '/api/generation'): Promise<FuelEntry[]> {
+  let res = await fetch(url);
+  if (!res.ok && url !== '/mock/mock_generation.json') {
+    console.warn(`fetchMix: live API returned ${res.status}, falling back to mock`);
+    res = await fetch('/mock/mock_generation.json');
+  }
   if (!res.ok) throw new Error(`fetchMix: ${res.status} ${res.statusText}`);
   return parseMix(await res.json() as RawMix);
 }

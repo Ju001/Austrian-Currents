@@ -13,6 +13,7 @@ dist/
 .env
 .env.local
 *.local
+.dev.vars
 
 # wrangler — contains KV namespace IDs specific to your Cloudflare account
 # copy wrangler.toml.example → wrangler.toml and fill in your IDs
