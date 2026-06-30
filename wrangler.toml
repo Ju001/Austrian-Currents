@@ -2,10 +2,7 @@ name = "austrian-currents"
 compatibility_date = "2024-12-01"
 pages_build_output_dir = "dist"
 
-# Milestone 5: uncomment and fill in real IDs once live ENTSO-E proxy is wired up:
-#   wrangler kv namespace create GENERATION_CACHE
-#   wrangler kv namespace create GENERATION_CACHE --preview
-# [[kv_namespaces]]
-# binding = "GENERATION_CACHE"
-# id = "REPLACE_WITH_KV_NAMESPACE_ID"
-# preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+[[kv_namespaces]]
+binding = "GENERATION_CACHE"
+id = "f71351adc0e2425ba9440f534c8b1687"
+preview_id = "79db96262aaa466b90d934673aee3fef"

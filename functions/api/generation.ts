@@ -1,15 +1,23 @@
 import { XMLParser } from 'fast-xml-parser'
+import type { KVNamespace } from '@cloudflare/workers-types'
 
 interface Env {
   ENTSOE_TOKEN: string
+  GENERATION_CACHE: KVNamespace
 }
 
 const AT_EIC = '10YAT-APG------L'
 const ENTSOE_URL = 'https://web-api.tp.entsoe.eu/api'
-
+const CACHE_KEY = 'at_generation'
+const CACHE_TTL = 15 * 60 // 15 minutes in seconds
 
 export async function onRequest(context: { env: Env }): Promise<Response> {
-  const token = context.env.ENTSOE_TOKEN
+  const { env } = context
+
+  const cached = await env.GENERATION_CACHE.get(CACHE_KEY)
+  if (cached) return json(cached)
+
+  const token = env.ENTSOE_TOKEN
   if (!token) return err('ENTSOE_TOKEN not configured', 500)
 
   // Request a 2-hour window ending now to guarantee at least one settled interval
@@ -62,11 +70,15 @@ export async function onRequest(context: { env: Env }): Promise<Response> {
     }
   }
 
-  return json({
+  const body = JSON.stringify({
     timestamp: now.toISOString(),
     generation_mw,
     pumped_storage_mw: { generating: psGenerating, pumping: psPumping },
   })
+
+  await env.GENERATION_CACHE.put(CACHE_KEY, body, { expirationTtl: CACHE_TTL })
+
+  return json(body)
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -95,13 +107,16 @@ function truncateToHour(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours()))
 }
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+function json(body: string, status = 200): Response {
+  return new Response(body, {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
 }
 
 function err(message: string, status: number): Response {
-  return json({ error: message }, status)
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
