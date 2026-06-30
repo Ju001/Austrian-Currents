@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "pages:dev": "wrangler pages dev --proxy 5173",
     "dev:full": "concurrently -n vite,wrangler -c cyan,yellow \"npm run dev\" \"npm run pages:dev\"",
-    "deploy": "npm run build && wrangler pages deploy dist"
+    "deploy": "wrangler pages deploy dist"
   },
   "dependencies": {
     "@deck.gl/mapbox": "^9.3.5",
