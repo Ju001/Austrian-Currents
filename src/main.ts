@@ -22,10 +22,9 @@ const map = new maplibregl.Map({
     ],
   },
   bounds: [[9.4, 46.3], [17.2, 49.1]],
-  fitBoundsOptions: { padding: 24 },
-  minZoom: 5,
+  fitBoundsOptions: { padding: 32 },
+  minZoom: 4,
   maxZoom: 15,
-  maxBounds: [[6.5, 44.5], [20.0, 51.0]],
   pitchWithRotate: false,
   dragRotate: false,
 });
