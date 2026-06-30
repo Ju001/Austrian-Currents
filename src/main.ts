@@ -1,10 +1,15 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { addPlantsLayer, updateClusters } from './plants';
+
+const INITIAL_RADIUS = 20;
+const INITIAL_MIN_CAP = 0;
 
 const map = new maplibregl.Map({
   container: 'map',
   style: {
     version: 8,
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {},
     layers: [
       {
@@ -22,6 +27,30 @@ const map = new maplibregl.Map({
   pitchWithRotate: false,
   dragRotate: false,
 });
+
+// ── Slider wiring ─────────────────────────────────────────────────────────────
+
+const radiusSlider = document.getElementById('radius-slider') as HTMLInputElement;
+const mincapSlider = document.getElementById('mincap-slider') as HTMLInputElement;
+const radiusVal    = document.getElementById('radius-val') as HTMLSpanElement;
+const mincapVal    = document.getElementById('mincap-val') as HTMLSpanElement;
+
+function getRadius(): number { return +radiusSlider.value; }
+function getMinCap(): number { return +mincapSlider.value; }
+
+let plantsReady = false;
+
+radiusSlider.addEventListener('input', () => {
+  radiusVal.textContent = `${radiusSlider.value} km`;
+  if (plantsReady) updateClusters(map, getRadius(), getMinCap());
+});
+
+mincapSlider.addEventListener('input', () => {
+  mincapVal.textContent = `${mincapSlider.value} MW`;
+  if (plantsReady) updateClusters(map, getRadius(), getMinCap());
+});
+
+// ── Map load ──────────────────────────────────────────────────────────────────
 
 map.on('load', () => {
   map.addSource('austria-states', {
@@ -48,4 +77,13 @@ map.on('load', () => {
       'line-width': 1,
     },
   });
+
+  addPlantsLayer(map, INITIAL_RADIUS, INITIAL_MIN_CAP)
+    .then(() => { plantsReady = true; })
+    .catch(console.error);
+});
+
+// Re-cluster whenever zoom settles (dissolves clusters as user zooms in)
+map.on('zoomend', () => {
+  if (plantsReady) updateClusters(map, getRadius(), getMinCap());
 });
