@@ -76,15 +76,21 @@ map.on('load', () => {
     },
   });
 
-  // 4. Energy mix → fluid colours
-  fetchMix()
-    .then(entries => {
+  // 4. Energy mix → fluid colours (initial + 15-min polling)
+  async function refreshMix() {
+    try {
+      const entries = await fetchMix();
       const weights = toColorWeights(entries);
       fluidLayer.setColors(weights);
       renderLegend(entries);
       buildSliders(entries, weights);
-    })
-    .catch(err => console.error('Failed to load energy mix:', err));
+    } catch (err) {
+      console.error('Failed to load energy mix:', err);
+    }
+  }
+
+  refreshMix();
+  setInterval(refreshMix, 15 * 60 * 1000);
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

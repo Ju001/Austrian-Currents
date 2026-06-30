@@ -6,21 +6,44 @@ interface Env {
   GENERATION_CACHE: KVNamespace
 }
 
+interface PagesContext {
+  env: Env
+  waitUntil: (p: Promise<unknown>) => void
+}
+
 const AT_EIC = '10YAT-APG------L'
 const ENTSOE_URL = 'https://web-api.tp.entsoe.eu/api'
 const CACHE_KEY = 'at_generation'
-const CACHE_TTL = 15 * 60 // 15 minutes in seconds
+const CACHE_TTL = 15 * 60        // seconds KV keeps the entry
+const REFRESH_AFTER = 13 * 60    // seconds before TTL at which we background-refresh
 
-export async function onRequest(context: { env: Env }): Promise<Response> {
+export async function onRequest(context: PagesContext): Promise<Response> {
   const { env } = context
 
   const cached = await env.GENERATION_CACHE.get(CACHE_KEY)
-  if (cached) return json(cached)
+  if (cached) {
+    // Return stale data immediately; kick off a background refresh if near expiry
+    try {
+      const age = (Date.now() - new Date(JSON.parse(cached).timestamp).getTime()) / 1000
+      if (age > REFRESH_AFTER) context.waitUntil(fetchAndCache(env))
+    } catch { /* ignore — return whatever is cached */ }
+    return json(cached)
+  }
 
+  // Cache miss: fetch synchronously
+  try {
+    return json(await fetchAndCache(env))
+  } catch (e) {
+    return err(String(e), 502)
+  }
+}
+
+// ── ENTSO-E fetch + KV write ───────────────────────────────────────────────────
+
+async function fetchAndCache(env: Env): Promise<string> {
   const token = env.ENTSOE_TOKEN
-  if (!token) return err('ENTSOE_TOKEN not configured', 500)
+  if (!token) throw new Error('ENTSOE_TOKEN not configured')
 
-  // Request a 2-hour window ending now to guarantee at least one settled interval
   const now = new Date()
   const periodEnd = truncateToHour(now)
   const periodStart = new Date(periodEnd.getTime() - 2 * 60 * 60 * 1000)
@@ -34,14 +57,9 @@ export async function onRequest(context: { env: Env }): Promise<Response> {
     periodEnd: entsoeDateTime(periodEnd),
   })
 
-  let xmlText: string
-  try {
-    const res = await fetch(`${ENTSOE_URL}?${params}`)
-    if (!res.ok) return err(`ENTSO-E ${res.status}: ${await res.text()}`, 502)
-    xmlText = await res.text()
-  } catch (e) {
-    return err(String(e), 502)
-  }
+  const res = await fetch(`${ENTSOE_URL}?${params}`)
+  if (!res.ok) throw new Error(`ENTSO-E ${res.status}: ${await res.text()}`)
+  const xmlText = await res.text()
 
   const parser = new XMLParser({ ignoreAttributes: false })
   const doc = parser.parse(xmlText)
@@ -54,11 +72,8 @@ export async function onRequest(context: { env: Env }): Promise<Response> {
     const psr: string = ts?.MktPSRType?.psrType ?? ''
     if (!psr) continue
 
-    // inBiddingZone = generation flowing into the zone (producing)
-    // outBiddingZone = consumption flowing out (pumped storage charging)
     const isIn = 'inBiddingZone_Domain.mRID' in ts
     const isOut = 'outBiddingZone_Domain.mRID' in ts
-
     const { mw } = latestPoint(ts)
     if (mw <= 0) continue
 
@@ -77,8 +92,7 @@ export async function onRequest(context: { env: Env }): Promise<Response> {
   })
 
   await env.GENERATION_CACHE.put(CACHE_KEY, body, { expirationTtl: CACHE_TTL })
-
-  return json(body)
+  return body
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -97,12 +111,10 @@ function toArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v]
 }
 
-/** ENTSO-E datetime format: YYYYMMDDHHmm (UTC) */
 function entsoeDateTime(d: Date): string {
   return d.toISOString().replace(/[-T:]/g, '').slice(0, 12)
 }
 
-/** Truncate to the start of the current UTC hour */
 function truncateToHour(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours()))
 }
