@@ -20,3 +20,6 @@ wrangler.toml
 
 # large raw datasets — download locally via prep scripts
 data/raw/
+
+*.zip
+*.csv
