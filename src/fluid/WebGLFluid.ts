@@ -54,6 +54,18 @@ interface DoubleFBO {
   swap(): void;
 }
 
+/** A short-lived dye source that eases its colour in and out over its lifetime. */
+interface Emitter {
+  u: number;
+  v: number;
+  color: [number, number, number];
+  dx: number; // one-time velocity impulse, fired at birth
+  dy: number;
+  radius: number;
+  bornMs: number;
+  fired: boolean; // whether the velocity impulse has been injected yet
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SIM_W = 512; // higher res → smoother fluid & national border
@@ -69,6 +81,7 @@ const DISPLAY_BRIGHTNESS = 1.25; // >1 lifts faded dye back toward vivid
 const SPLAT_RADIUS = 0.035; // larger blobs so each refresh is visible and spreads
 const SPLAT_FORCE = 0.3; // directional velocity impulse per splat (UV/s)
 const DYE_STRENGTH = 1.0; // paint toward the full pure fuel colour
+const SPLAT_FADE_MS = 800; // emitter lifetime: dye eases in then out (no pop)
 const BG_FORCE = 0.001; // permanent rotational body force (tangential UV/s)
 const BG_CENTER: [number, number] = [0.5, 0.5]; // gyre centre in sim UV
 const BORDER_BAND = 0.08; // free-slip band width just inside the border (SDF units)
@@ -121,6 +134,7 @@ export class WebGLFluid {
   // Animation state
   private lastTimeMs = 0;
   private nextSplatMs = 0;
+  private emitters: Emitter[] = [];
   private initialized = false;
   private pendingDyeClear = false; // set by setColors() to flush stale dye
 
@@ -343,17 +357,21 @@ export class WebGLFluid {
     // ── One-time initialisation ────────────────────────────────────────────
     if (!this.initialized) {
       this.initialized = true;
-      // A few opening splats so the basin starts alive and coloured.
-      for (let i = 0; i < 10; i++) this.addSplat();
-      this.nextSplatMs = timeMs + 350;
+      // Opening emitters with staggered births so the basin fills in gently
+      // rather than popping up all at once.
+      for (let i = 0; i < 6; i++) this.spawnEmitter(timeMs + i * 150);
+      this.nextSplatMs = timeMs + 6 * 150;
     }
 
-    // ── Autonomous coupled splats (directional jet + dye, same point) ──────
+    // ── Autonomous emitters (coupled jet + eased-in dye, same point) ───────
     if (timeMs >= this.nextSplatMs) {
-      this.addSplat();
+      this.spawnEmitter(timeMs);
       // Faster cadence replenishes fresh colour to keep pace with the decay.
       this.nextSplatMs = timeMs + 200 + Math.random() * 300;
     }
+
+    // Paint each active emitter's dye for this frame (and fire its jet at birth).
+    this.updateEmitters(timeMs);
 
     // ── Simulation step ────────────────────────────────────────────────────
     this.computeVorticity();
@@ -649,46 +667,72 @@ export class WebGLFluid {
   // ── Autonomous injection ─────────────────────────────────────────────────
 
   /**
-   * One coupled splat: a directional velocity jet AND a dye blob of one palette
-   * colour, injected at the same interior point. The jet carries the dye across
-   * the basin and bounces off the SDF walls — this is what makes it slosh.
-   * Dye never decays, so we keep painting: new fuel colours overwrite old ones
-   * (paint mode can't whiteout) and the basin stays full of evolving colour.
+   * Queue a new emitter: a fuel colour + a one-time directional velocity jet at
+   * a random interior point. The dye is NOT painted here — updateEmitters() eases
+   * it in (and out) over the emitter's lifetime so it never pops in.
+   * `bornMs` may be in the future to stagger a group of emitters.
    */
-  private addSplat(): void {
+  private spawnEmitter(bornMs: number): void {
     if (this.interiorPoints.length === 0 || this.colors.length === 0) return;
     const [u, v] = this.randomInterior();
-
-    // Random directional impulse (a jet), not a radial/rotating field.
     const angle = Math.random() * Math.PI * 2;
     const force = SPLAT_FORCE * (0.6 + Math.random() * 0.8);
-    const dx = Math.cos(angle) * force;
-    const dy = Math.sin(angle) * force;
-    // velocity: ADD, no clamp — keep negative / large components
-    this.splatField(
-      this.velocity,
+    this.emitters.push({
       u,
       v,
-      SPLAT_RADIUS,
-      [dx, dy, 0, 0],
-      -1e9,
-      1e9,
-      0,
-    );
+      color: this.sampleColor(),
+      dx: Math.cos(angle) * force,
+      dy: Math.sin(angle) * force,
+      radius: SPLAT_RADIUS * (0.7 + Math.random() * 0.6), // size variety
+      bornMs,
+      fired: false,
+    });
+  }
 
-    const c = this.sampleColor();
-    // dye: PAINT the pure fuel colour (mix toward it), clamp [0,1].
-    const s = DYE_STRENGTH;
-    this.splatField(
-      this.dye,
-      u,
-      v,
-      SPLAT_RADIUS,
-      [c[0] * s, c[1] * s, c[2] * s, s],
-      0,
-      1,
-      1,
-    );
+  /**
+   * Per-frame update of all active emitters. Each one fires its velocity jet once
+   * (at birth) and paints its dye with a sine envelope (0 → 1 → 0) over its
+   * lifetime, so the colour fades in and recedes organically instead of popping.
+   */
+  private updateEmitters(timeMs: number): void {
+    for (let i = this.emitters.length - 1; i >= 0; i--) {
+      const e = this.emitters[i];
+      const age = (timeMs - e.bornMs) / SPLAT_FADE_MS;
+      if (age < 0) continue; // staggered birth still in the future
+      if (age >= 1) {
+        this.emitters.splice(i, 1);
+        continue;
+      }
+
+      // Fire the velocity jet once, when the emitter first becomes active.
+      if (!e.fired) {
+        e.fired = true;
+        this.splatField(
+          this.velocity,
+          e.u,
+          e.v,
+          e.radius,
+          [e.dx, e.dy, 0, 0],
+          -1e9,
+          1e9,
+          0,
+        );
+      }
+
+      // Ease the dye in then out: paint toward a colour scaled by the envelope.
+      const env = Math.sin(Math.PI * age) * DYE_STRENGTH;
+      const c = e.color;
+      this.splatField(
+        this.dye,
+        e.u,
+        e.v,
+        e.radius,
+        [c[0] * env, c[1] * env, c[2] * env, env],
+        0,
+        1,
+        1,
+      );
+    }
   }
 
   private splatField(
