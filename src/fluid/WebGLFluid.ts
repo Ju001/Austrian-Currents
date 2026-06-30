@@ -62,12 +62,14 @@ const TEXEL_SIZE: [number, number] = [1 / SIM_W, 1 / SIM_H];
 const ALPHA = -(TEXEL_SIZE[0] * TEXEL_SIZE[0]); // -h² for Jacobi
 const JACOBI_ITERS = 20;
 const VELOCITY_DISS = 0.99; // mild — the background gyre keeps replenishing it
-const DYE_DISS = 1.0; // colours never fade (permanent dye)
-const VORT_STRENGTH = 10.0; // gentle swirl — high values turn slosh into foam
-const SPLAT_RADIUS = 0.005; // small soft blobs (reference-style)
-const SPLAT_FORCE = 0.45; // directional velocity impulse per splat (UV/s)
+const DYE_DISS = 0.7; // per-frame multiplier — very aggressive (~2-frame half-life)
+const VORT_STRENGTH = 6.0; // lower → colours mix more slowly, stay distinct longer
+const DISPLAY_SATURATION = 1.6; // >1 deepens hue to fight wash-out
+const DISPLAY_BRIGHTNESS = 1.25; // >1 lifts faded dye back toward vivid
+const SPLAT_RADIUS = 0.035; // larger blobs so each refresh is visible and spreads
+const SPLAT_FORCE = 0.3; // directional velocity impulse per splat (UV/s)
 const DYE_STRENGTH = 1.0; // paint toward the full pure fuel colour
-const BG_FORCE = 0.005; // permanent rotational body force (tangential UV/s)
+const BG_FORCE = 0.001; // permanent rotational body force (tangential UV/s)
 const BG_CENTER: [number, number] = [0.5, 0.5]; // gyre centre in sim UV
 const BORDER_BAND = 0.08; // free-slip band width just inside the border (SDF units)
 
@@ -239,9 +241,9 @@ export class WebGLFluid {
       color: w.color,
       weight: w.weight / total,
     }));
-    // No dye clear: with permanent (non-decaying) dye, new weights paint in
-    // gradually via subsequent splats so a slider change recolours smoothly
-    // rather than wiping the basin.
+    // No dye clear: a slider change just re-weights the palette. New splats
+    // paint in the updated mix while the decay fades the old colours out over a
+    // few seconds, so the basin recolours smoothly instead of being reset.
   }
 
   setViewport(
@@ -342,14 +344,15 @@ export class WebGLFluid {
     if (!this.initialized) {
       this.initialized = true;
       // A few opening splats so the basin starts alive and coloured.
-      for (let i = 0; i < 4; i++) this.addSplat();
+      for (let i = 0; i < 10; i++) this.addSplat();
       this.nextSplatMs = timeMs + 350;
     }
 
     // ── Autonomous coupled splats (directional jet + dye, same point) ──────
     if (timeMs >= this.nextSplatMs) {
       this.addSplat();
-      this.nextSplatMs = timeMs + 300 + Math.random() * 450;
+      // Faster cadence replenishes fresh colour to keep pace with the decay.
+      this.nextSplatMs = timeMs + 200 + Math.random() * 300;
     }
 
     // ── Simulation step ────────────────────────────────────────────────────
@@ -635,6 +638,8 @@ export class WebGLFluid {
     gl.uniform2fv(gl.getUniformLocation(p, "u_br"), this.br);
     gl.uniform2fv(gl.getUniformLocation(p, "u_origin"), this.sdfOrigin);
     gl.uniform2fv(gl.getUniformLocation(p, "u_scale"), this.sdfScale);
+    gl.uniform1f(gl.getUniformLocation(p, "u_saturation"), DISPLAY_SATURATION);
+    gl.uniform1f(gl.getUniformLocation(p, "u_brightness"), DISPLAY_BRIGHTNESS);
     // Draw directly into the currently-bound FBO — caller has already restored
     // MapLibre's framebuffer. Never bind null here: MapLibre may be rendering
     // into its own FBO, and null would miss it entirely.

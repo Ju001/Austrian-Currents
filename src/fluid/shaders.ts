@@ -218,6 +218,8 @@ uniform vec2 u_resolution;
 uniform vec2 u_tl, u_tr, u_bl, u_br;  // viewport Mercator corners
 uniform vec2 u_origin;   // simulation domain Mercator origin
 uniform vec2 u_scale;    // simulation domain Mercator size
+uniform float u_saturation; // >1 deepens hue against wash-out
+uniform float u_brightness; // >1 lifts faded dye back to vivid
 
 void main() {
   float nx  =       gl_FragCoord.x / u_resolution.x;
@@ -230,8 +232,16 @@ void main() {
     return;
   }
 
-  // Dye is clamped to [0,1] at injection time; show it as-is.
   vec3 col = max(texture2D(u_dye, simUV).rgb, vec3(0.0));
+
+  // Advection blends hues toward grey and decay dims them, so the dye drifts
+  // washed-out. Counter both at display time:
+  //   1. saturation  — push colour away from its luma (grey) back toward hue
+  //   2. brightness  — lift the value so faded dye still reads vividly
+  float luma = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(luma), col, u_saturation);          // re-saturate
+  col = clamp(col * u_brightness, 0.0, 1.0);          // re-energise
+
   // Alpha tracks dye brightness so empty regions are transparent (map shows through).
   // MapLibre uses premultiplied alpha blending (gl.ONE, gl.ONE_MINUS_SRC_ALPHA),
   // so we premultiply before output.
