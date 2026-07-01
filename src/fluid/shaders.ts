@@ -199,7 +199,8 @@ uniform float u_opacity;   // dt-scaled paint rate (dye); 1.0 for velocity
 void main() {
   vec4  base     = texture2D(u_target, v_uv);
   vec2  d        = v_uv - u_point;
-  float strength = exp(-dot(d, d) / (u_radius * u_radius));
+  float r        = length(d) / u_radius;
+  float strength = 1.0 - smoothstep(0.55, 0.6, r);
   // Velocity ADDS (jets accumulate momentum). Dye PAINTS — it replaces toward the
   // pure colour, so overlapping splats never sum hues into white. u_opacity scales
   // the paint rate so the per-frame mix is framerate-independent.
