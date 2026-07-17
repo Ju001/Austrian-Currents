@@ -76,10 +76,13 @@ map.on('load', () => {
     },
   });
 
-  // 4. Energy mix → fluid colours (initial + 15-min polling)
+  // 4. Energy mix → fluid colours
+  // In dev mode: load mock once and let sliders drive changes (no polling).
+  // In production: poll live API every 15 min.
   async function refreshMix() {
     try {
-      const entries = await fetchMix();
+      const url = import.meta.env.DEV ? '/mock/mock_generation.json' : '/api/generation';
+      const entries = await fetchMix(url);
       const weights = toColorWeights(entries);
       fluidLayer.setColors(weights);
       renderLegend(entries);
@@ -90,7 +93,9 @@ map.on('load', () => {
   }
 
   refreshMix();
-  setInterval(refreshMix, 15 * 60 * 1000);
+  if (!import.meta.env.DEV) {
+    setInterval(refreshMix, 15 * 60 * 1000);
+  }
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,7 +112,7 @@ function renderLegend(entries: FuelEntry[]) {
   const panel = document.getElementById('legend')!;
   const total = entries.reduce((s, e) => s + e.mw, 0);
   panel.innerHTML = entries.map(e => {
-    const pct       = ((e.mw / total) * 100).toFixed(1);
+    const pct       = total > 0 ? ((e.mw / total) * 100).toFixed(1) : '0.0';
     const [r, g, b] = e.color.map(v => Math.round(Math.min(v, 1) * 255));
     const hex       = `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
     return `<div class="leg-row">
