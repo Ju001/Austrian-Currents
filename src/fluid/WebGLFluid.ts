@@ -76,11 +76,11 @@ const TEXEL_SIZE: [number, number] = [1 / SIM_W, 1 / SIM_H];
 const ALPHA = -(TEXEL_SIZE[0] * TEXEL_SIZE[0]); // -h² for Jacobi
 const JACOBI_ITERS = 20;
 const VELOCITY_DISS = 0.99; // mild — the background gyre keeps replenishing it
-const DYE_DISS = 0.7; // per-frame multiplier — very aggressive (~2-frame half-life)
+const DYE_DISS = 0.999; // per-frame multiplier — slow fade so dye covers the basin evenly
 const VORT_STRENGTH = 6.0; // lower → colours mix more slowly, stay distinct longer
 const DISPLAY_SATURATION = 1.6; // >1 deepens hue to fight wash-out
 const DISPLAY_BRIGHTNESS = 1.25; // >1 lifts faded dye back toward vivid
-const SPLAT_RADIUS = 0.035; // larger blobs so each refresh is visible and spreads
+const SPLAT_RADIUS = 0.075; // larger blobs so each refresh is visible and spreads
 const SPLAT_FORCE = 0.3; // directional velocity impulse per splat (UV/s)
 const DYE_STRENGTH = 1.0; // paint toward the full pure fuel colour
 const PAINT_RATE = 0.6; // per-60fps-frame dye paint convergence (dt-scaled at runtime)
@@ -272,7 +272,11 @@ export class WebGLFluid {
 
   setColors(weights: ColorWeight[]): void {
     const total = weights.reduce((s, w) => s + w.weight, 0);
-    if (total <= 0) return;
+    if (total <= 0) {
+      // Zero generation: stop emitting entirely so the existing dye decays away.
+      this.colors = [];
+      return;
+    }
     this.colors = weights.map((w) => ({
       color: w.color,
       weight: w.weight / total,
@@ -363,6 +367,13 @@ export class WebGLFluid {
     ) as WebGLBuffer | null;
     const prevVP = gl.getParameter(gl.VIEWPORT) as Int32Array;
 
+    // MapLibre calls us with blending enabled (premultiplied alpha). The sim
+    // passes must overwrite their FBOs, not blend into them — with blending on,
+    // each advect pass ADDS the previous dye back in, so dissipation never wins
+    // and the basin saturates to a solid colour that never decays.
+    const prevBlend = gl.isEnabled(gl.BLEND);
+    gl.disable(gl.BLEND);
+
     gl.viewport(0, 0, SIM_W, SIM_H);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
 
@@ -414,6 +425,9 @@ export class WebGLFluid {
     this.postProcess();
 
     // ── Display ────────────────────────────────────────────────────────────
+    // Restore blending for the final composite into MapLibre's framebuffer —
+    // the display shader outputs premultiplied alpha and relies on it.
+    if (prevBlend) gl.enable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, prevFBO);
     gl.viewport(prevVP[0], prevVP[1], prevVP[2], prevVP[3]);
     this.drawDisplay(gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -448,12 +462,16 @@ export class WebGLFluid {
       gl.deleteTexture(d.write.tex);
       gl.deleteFramebuffer(d.write.fbo);
     });
-    [this.divergence, this.vorticity, this.ppA, this.ppB, this.bloomTex].forEach(
-      (s) => {
-        gl.deleteTexture(s.tex);
-        gl.deleteFramebuffer(s.fbo);
-      },
-    );
+    [
+      this.divergence,
+      this.vorticity,
+      this.ppA,
+      this.ppB,
+      this.bloomTex,
+    ].forEach((s) => {
+      gl.deleteTexture(s.tex);
+      gl.deleteFramebuffer(s.fbo);
+    });
   }
 
   // ── Texture / FBO helpers ────────────────────────────────────────────────
@@ -796,7 +814,8 @@ export class WebGLFluid {
         );
       }
 
-      // Ease the dye in then out: paint toward a colour scaled by the envelope.
+      // Ease the paint strength in then out, but always toward the full fuel colour
+      // so the envelope never pulls dye toward black.
       const env = Math.sin(Math.PI * age) * DYE_STRENGTH;
       const c = e.color;
       this.splatField(
@@ -804,11 +823,11 @@ export class WebGLFluid {
         e.u,
         e.v,
         e.radius,
-        [c[0] * env, c[1] * env, c[2] * env, env],
+        [c[0], c[1], c[2], 1.0],
         0,
         1,
         1,
-        paintOp,
+        paintOp * env,
       );
     }
   }
