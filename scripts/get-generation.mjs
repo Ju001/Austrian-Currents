@@ -14,7 +14,7 @@ const B_CODE = {
   B05: 'Hard Coal', B06: 'Oil', B07: 'Oil Shale', B08: 'Peat',
   B09: 'Geothermal', B10: 'Pumped Storage', B11: 'Hydro', B12: 'Hydro',
   B13: 'Marine', B14: 'Nuclear', B15: 'Other Renewable', B16: 'Solar',
-  B17: 'Waste', B18: 'Wind Offshore', B19: 'Wind', B20: 'Other', B25: 'Energy Storage',
+  B17: 'Waste', B18: 'Wind', B19: 'Wind Offshore', B20: 'Other', B25: 'Energy Storage',
 }
 
 function loadToken() {
