@@ -71,4 +71,4 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for Cloudflare setup and production deploymen
 
 MIT — see [LICENSE](LICENSE).
 
-ENTSO-E data is used under their [terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html) (free, registration required).
+ENTSO-E data is used under their [terms of use](https://transparency.entsoe.eu/terms-and-conditions) (free, registration required).
