@@ -268,6 +268,13 @@ void main() {
 
   vec3 col = max(texture2D(u_dye, simUV).rgb, vec3(0.0));
 
+  // Alpha is derived from raw dye intensity BEFORE display processing, so that
+  // faded dye fades to transparent rather than becoming a saturated ghost colour.
+  // The smoothstep cuts the long exponential-decay tail: dye below ~0.05 is fully
+  // transparent instead of lingering as a dark film over the map.
+  float m = max(col.r, max(col.g, col.b));
+  float a = smoothstep(0.15, 0.45, m) * 0.92;
+
   // Advection blends hues toward grey and decay dims them, so the dye drifts
   // washed-out. Counter both at display time:
   //   1. saturation  — push colour away from its luma (grey) back toward hue
@@ -280,9 +287,6 @@ void main() {
   vec3 bloom = max(texture2D(u_bloom, simUV).rgb, vec3(0.0));
   col = clamp(col + bloom * u_bloomStrength, 0.0, 1.0);
 
-  // Alpha tracks dye brightness so empty regions are transparent (map shows through).
-  // MapLibre uses premultiplied alpha blending (gl.ONE, gl.ONE_MINUS_SRC_ALPHA),
-  // so we premultiply before output.
-  float a = clamp(max(col.r, max(col.g, col.b)), 0.0, 0.92);
+  // MapLibre uses premultiplied alpha blending (gl.ONE, gl.ONE_MINUS_SRC_ALPHA).
   gl_FragColor = vec4(col * a, a);
 }`.trim();
