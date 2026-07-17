@@ -6,8 +6,18 @@ import { XMLParser } from 'fast-xml-parser'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
-const AT_EIC = '10YAT-APG------L'
+const AT_EIC    = '10YAT-APG------L'
 const ENTSOE_URL = 'https://web-api.tp.entsoe.eu/api'
+
+const NEIGHBOR_EIC = {
+  DE: '10Y1001A1001A83F',
+  CH: '10YCH-SWISSGRIDZ',
+  IT: '10YIT-GRTN-----B',
+  SI: '10YSI-ELES-----O',
+  HU: '10YHU-MAVIR----U',
+  SK: '10YSK-SEPS-----K',
+  CZ: '10YCZ-CEPS-----N',
+}
 
 const B_CODE = {
   B01: 'Biomass', B02: 'Lignite', B03: 'Coal Gas', B04: 'Gas',
@@ -38,9 +48,13 @@ function toArray(v) {
 function latestPoint(ts) {
   const period = toArray(ts?.Period).at(-1)
   const points = toArray(period?.Point)
-  const last = points.at(-1)
-  const mw = Number(last?.quantity ?? 0)
+  const last   = points.at(-1)
+  const mw     = Number(last?.quantity ?? 0)
   return { mw: isFinite(mw) ? mw : 0, position: Number(last?.position ?? 0) }
+}
+
+function parse(xml) {
+  return new XMLParser({ ignoreAttributes: false }).parse(xml)
 }
 
 const token = loadToken()
@@ -49,38 +63,37 @@ if (!token) {
   process.exit(1)
 }
 
-const now = new Date()
-const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()))
+const now         = new Date()
+const periodEnd   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()))
 const periodStart = new Date(periodEnd.getTime() - 2 * 60 * 60 * 1000)
 
-const params = new URLSearchParams({
+// ── Fetch A75 generation ───────────────────────────────────────────────────────
+
+const genRes = await fetch(`${ENTSOE_URL}?${new URLSearchParams({
   securityToken: token,
   documentType: 'A75',
   processType: 'A16',
   in_Domain: AT_EIC,
   periodStart: entsoeDateTime(periodStart),
   periodEnd: entsoeDateTime(periodEnd),
-})
+})}`)
 
-const res = await fetch(`${ENTSOE_URL}?${params}`)
-if (!res.ok) {
-  console.error(`ENTSO-E error ${res.status}:`, await res.text())
+if (!genRes.ok) {
+  console.error(`ENTSO-E A75 error ${genRes.status}:`, await genRes.text())
   process.exit(1)
 }
 
-const parser = new XMLParser({ ignoreAttributes: false })
-const doc = parser.parse(await res.text())
-
+const doc = parse(await genRes.text())
 const generation_mw = {}
 let psGenerating = 0, psPumping = 0
 
 for (const ts of toArray(doc?.GL_MarketDocument?.TimeSeries)) {
-  const psr = ts?.MktPSRType?.psrType ?? ''
-  if (!psr) continue
-  const isIn  = 'inBiddingZone_Domain.mRID' in ts
+  const psr   = ts?.MktPSRType?.psrType ?? ''
+  const isIn  = 'inBiddingZone_Domain.mRID'  in ts
   const isOut = 'outBiddingZone_Domain.mRID' in ts
   const { mw } = latestPoint(ts)
-  if (mw <= 0) continue
+  if (!psr || mw <= 0) continue
+
   if (psr === 'B10') {
     if (isIn)  psGenerating += mw
     if (isOut) psPumping   += mw
@@ -89,10 +102,45 @@ for (const ts of toArray(doc?.GL_MarketDocument?.TimeSeries)) {
   }
 }
 
+// ── Fetch A11 cross-border flows (all neighbors in parallel) ──────────────────
+
+async function fetchFlow(inDomain, outDomain) {
+  try {
+    const res = await fetch(`${ENTSOE_URL}?${new URLSearchParams({
+      securityToken: token,
+      documentType: 'A11',
+      in_Domain: inDomain,
+      out_Domain: outDomain,
+      periodStart: entsoeDateTime(periodStart),
+      periodEnd: entsoeDateTime(periodEnd),
+    })}`)
+    if (!res.ok) return 0
+    const d    = parse(await res.text())
+    const root = d?.Publication_MarketDocument ?? d?.GL_MarketDocument ?? {}
+    const tss  = toArray(root?.TimeSeries)
+    return tss.length > 0 ? latestPoint(tss[0]).mw : 0
+  } catch { return 0 }
+}
+
+const flowResults = await Promise.all(
+  Object.entries(NEIGHBOR_EIC).flatMap(([country, eic]) => [
+    fetchFlow(AT_EIC, eic).then(mw => ({ country, mw, dir: 'import' })),
+    fetchFlow(eic, AT_EIC).then(mw => ({ country, mw, dir: 'export' })),
+  ])
+)
+
+const cross_border_mw = {}
+for (const { country, mw, dir } of flowResults) {
+  cross_border_mw[country] = (cross_border_mw[country] ?? 0) + (dir === 'import' ? mw : -mw)
+}
+
+// ── Output ─────────────────────────────────────────────────────────────────────
+
 const result = {
   timestamp: now.toISOString(),
   generation_mw,
   pumped_storage_mw: { generating: psGenerating, pumping: psPumping },
+  cross_border_mw,
 }
 
 if (process.argv.includes('--raw')) {
@@ -100,29 +148,34 @@ if (process.argv.includes('--raw')) {
   process.exit(0)
 }
 
-// ── pretty table ──────────────────────────────────────────────────────────────
+// ── Pretty table ───────────────────────────────────────────────────────────────
 
 const byFuel = {}
 for (const [code, mw] of Object.entries(generation_mw)) {
   const fuel = B_CODE[code] ?? code
   byFuel[fuel] = (byFuel[fuel] ?? 0) + mw
 }
-const rows = Object.entries(byFuel).map(([fuel, mw]) => ({ fuel, mw }))
+const genRows = Object.entries(byFuel).map(([fuel, mw]) => ({ fuel, mw }))
+if (psGenerating > 0) genRows.push({ fuel: 'Pumped Storage (gen)',  mw:  psGenerating })
+if (psPumping   > 0) genRows.push({ fuel: 'Pumped Storage (pump)', mw: -psPumping })
+genRows.sort((a, b) => b.mw - a.mw)
 
-if (psGenerating > 0) rows.push({ fuel: 'Pumped Storage (gen)', mw: psGenerating })
-if (psPumping   > 0) rows.push({ fuel: 'Pumped Storage (pump)', mw: -psPumping })
-
-rows.sort((a, b) => b.mw - a.mw)
-
-const total = rows.filter(r => r.mw > 0).reduce((s, r) => s + r.mw, 0)
-const width  = Math.max(...rows.map(r => r.fuel.length))
+const total = genRows.filter(r => r.mw > 0).reduce((s, r) => s + r.mw, 0)
+const w     = Math.max(...genRows.map(r => r.fuel.length))
 
 console.log(`\nAustria generation  ${now.toUTCString()}`)
-console.log('─'.repeat(width + 24))
-for (const { fuel, mw } of rows) {
+console.log('─'.repeat(w + 24))
+for (const { fuel, mw } of genRows) {
   const bar  = '█'.repeat(Math.max(0, Math.round((Math.abs(mw) / total) * 20)))
   const sign = mw < 0 ? ' (consuming)' : ''
-  console.log(`${fuel.padEnd(width)}  ${String(Math.abs(mw).toFixed(0)).padStart(6)} MW  ${bar}${sign}`)
+  console.log(`${fuel.padEnd(w)}  ${String(Math.abs(mw).toFixed(0)).padStart(6)} MW  ${bar}${sign}`)
 }
-console.log('─'.repeat(width + 24))
-console.log(`${'Total'.padEnd(width)}  ${String(total.toFixed(0)).padStart(6)} MW`)
+console.log('─'.repeat(w + 24))
+console.log(`${'Total'.padEnd(w)}  ${String(total.toFixed(0)).padStart(6)} MW`)
+
+console.log(`\nCross-border flows`)
+console.log('─'.repeat(28))
+for (const [country, mw] of Object.entries(cross_border_mw).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))) {
+  const dir   = mw > 0 ? '◀ import' : '▶ export'
+  console.log(`${country}  ${dir}  ${String(Math.abs(mw).toFixed(0)).padStart(6)} MW`)
+}
