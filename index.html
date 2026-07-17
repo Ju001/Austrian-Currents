@@ -92,12 +92,61 @@
         cursor: pointer;
         height: 3px;
       }
+
+      /* Cross-border panel */
+      #cross-border {
+        position: absolute;
+        bottom: 50px;
+        right: 12px;
+        background: rgba(8, 8, 14, 0.82);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 10px 13px;
+        font-family: system-ui, sans-serif;
+        z-index: 1;
+        min-width: 148px;
+        backdrop-filter: blur(6px);
+      }
+      #cross-border h3 {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.35);
+        margin: 0 0 7px;
+      }
+      .cb-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 0;
+      }
+      .cb-arrow {
+        font-size: 9px;
+        color: rgba(210,228,255,0.7);
+        width: 10px;
+        flex-shrink: 0;
+      }
+      .cb-country {
+        font-size: 11px;
+        color: #99aacc;
+        width: 26px;
+        flex-shrink: 0;
+      }
+      .cb-mw {
+        font-size: 11px;
+        color: #ccd;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        flex: 1;
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="legend"></div>
     <div id="mix-controls"><h3>Mix</h3></div>
+    <div id="cross-border"><h3>Cross-Border</h3></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

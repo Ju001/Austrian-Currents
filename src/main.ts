@@ -1,10 +1,11 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import { fetchMix, type FuelEntry } from './energyMix';
+import { fetchMix, type FuelEntry, type CrossBorderFlow } from './energyMix';
 import { FluidLayer } from './fluid/layer';
 import type { ColorWeight } from './fluid/types';
 import { buildSDF } from './sdf';
+import { CrossBorderLayer } from './crossBorder/layer';
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 
@@ -33,12 +34,11 @@ const map = new maplibregl.Map({
 
 const fluidLayer = new FluidLayer();
 
-// Build SDF from Austria's border and hand it to the layer.
 fetch('/austria-mask.geojson')
   .then(r => r.json())
   .then((mask: { geometry: { coordinates: [number, number][][] } }) => {
     const ring = mask.geometry.coordinates[1] as [number, number][];
-    const sdf  = buildSDF(ring, 512); // 512² → smoother national border edge
+    const sdf  = buildSDF(ring, 512);
     fluidLayer.setSDF(sdf);
   })
   .catch(err => console.error('SDF build failed:', err));
@@ -46,7 +46,7 @@ fetch('/austria-mask.geojson')
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 map.on('load', () => {
-  // 1. Fluid simulation — full-screen WebGL, rendered first
+  // 1. Fluid simulation
   map.addLayer(fluidLayer);
 
   // 2. Outside-Austria mask
@@ -76,17 +76,20 @@ map.on('load', () => {
     },
   });
 
-  // 4. Energy mix → fluid colours
-  // In dev mode: load mock once and let sliders drive changes (no polling).
-  // In production: poll live API every 15 min.
+  // 4. Cross-border particle overlay
+  const crossBorderLayer = new CrossBorderLayer(map);
+
+  // 5. Energy mix + cross-border flows
   async function refreshMix() {
     try {
       const url = import.meta.env.DEV ? '/mock/mock_generation.json' : '/api/generation';
-      const entries = await fetchMix(url);
-      const weights = toColorWeights(entries);
+      const { fuels, crossBorder } = await fetchMix(url);
+      const weights = toColorWeights(fuels);
       fluidLayer.setColors(weights);
-      renderLegend(entries);
-      buildSliders(entries, weights);
+      renderLegend(fuels);
+      buildSliders(fuels, weights);
+      crossBorderLayer.setFlows(crossBorder);
+      renderCrossBorder(crossBorder);
     } catch (err) {
       console.error('Failed to load energy mix:', err);
     }
@@ -106,7 +109,7 @@ function toColorWeights(entries: FuelEntry[]): ColorWeight[] {
   return entries.map(e => ({ color: e.color, weight: e.mw / total }));
 }
 
-// ── Legend ────────────────────────────────────────────────────────────────────
+// ── Generation legend ─────────────────────────────────────────────────────────
 
 function renderLegend(entries: FuelEntry[]) {
   const panel = document.getElementById('legend')!;
@@ -164,5 +167,23 @@ function buildSliders(entries: FuelEntry[], initialWeights: ColorWeight[]) {
     panel.appendChild(row);
   });
 
-  void initialWeights; // passed for possible future use
+  void initialWeights;
+}
+
+// ── Cross-border panel ────────────────────────────────────────────────────────
+
+function renderCrossBorder(flows: CrossBorderFlow[]) {
+  const panel = document.getElementById('cross-border')!;
+  panel.querySelectorAll('.cb-row').forEach(el => el.remove());
+
+  flows.forEach(f => {
+    const row     = document.createElement('div');
+    row.className = 'cb-row';
+    const isImport = f.mw > 0;
+    row.innerHTML =
+      `<span class="cb-arrow">${isImport ? '◀' : '▶'}</span>` +
+      `<span class="cb-country">${f.country}</span>` +
+      `<span class="cb-mw">${Math.round(Math.abs(f.mw))} MW</span>`;
+    panel.appendChild(row);
+  });
 }

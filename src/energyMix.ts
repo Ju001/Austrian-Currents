@@ -49,13 +49,24 @@ export interface FuelEntry {
   color: [number, number, number];
 }
 
+export interface CrossBorderFlow {
+  country: string; // 'DE', 'CH', etc.
+  mw: number;      // positive = importing into Austria, negative = exporting
+}
+
+export interface GenerationData {
+  fuels: FuelEntry[];
+  crossBorder: CrossBorderFlow[];
+}
+
 // Shape of mock/mock_generation.json (and eventual live proxy response)
 interface RawMix {
   generation_mw: Record<string, number>;
   pumped_storage_mw?: { generating?: number; pumping?: number };
+  cross_border_mw?: Record<string, number>;
 }
 
-function parseMix(raw: RawMix): FuelEntry[] {
+function parseMix(raw: RawMix): GenerationData {
   const totals: Record<string, number> = {};
 
   for (const [code, mw] of Object.entries(raw.generation_mw)) {
@@ -63,12 +74,11 @@ function parseMix(raw: RawMix): FuelEntry[] {
     totals[fuel] = (totals[fuel] ?? 0) + mw;
   }
 
-  // Pumped storage generating is net generation (not consumption)
   const psGen = raw.pumped_storage_mw?.generating ?? 0;
   if (psGen > 0)
     totals["Pumped Storage"] = (totals["Pumped Storage"] ?? 0) + psGen;
 
-  return Object.entries(totals)
+  const fuels = Object.entries(totals)
     .filter(([, mw]) => mw > 0)
     .map(([fuel, mw]) => ({
       fuel,
@@ -76,9 +86,16 @@ function parseMix(raw: RawMix): FuelEntry[] {
       color: FUEL_COLORS[fuel] ?? FUEL_COLORS.Other,
     }))
     .sort((a, b) => b.mw - a.mw);
+
+  const crossBorder = Object.entries(raw.cross_border_mw ?? {})
+    .filter(([, mw]) => mw !== 0)
+    .map(([country, mw]) => ({ country, mw }))
+    .sort((a, b) => Math.abs(b.mw) - Math.abs(a.mw));
+
+  return { fuels, crossBorder };
 }
 
-export async function fetchMix(url = "/api/generation"): Promise<FuelEntry[]> {
+export async function fetchMix(url = "/api/generation"): Promise<GenerationData> {
   let res = await fetch(url);
   if (!res.ok && url !== "/mock/mock_generation.json") {
     console.warn(
