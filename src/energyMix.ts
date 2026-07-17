@@ -17,8 +17,8 @@ const B_CODE: Record<string, string> = {
   B15: 'Other Renewable',
   B16: 'Solar',
   B17: 'Waste',
-  B18: 'Wind',
-  B19: 'Wind Offshore',
+  B18: 'Wind Offshore',
+  B19: 'Wind',
   B20: 'Other',
   B25: 'Energy Storage',
 };
