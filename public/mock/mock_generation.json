@@ -1,17 +1,17 @@
 {
-  "_comment": "ENTSO-E B-codes: B01=Biomass, B04=Fossil Gas, B10=Hydro Run-of-river, B11=Hydro Reservoir, B12=Hydro Pumped Storage, B16=Solar, B18=Wind Onshore, B20=Waste",
+  "_comment": "ENTSO-E B-codes: B01=Biomass, B04=Fossil Gas, B10=Hydro Pumped Storage, B11=Hydro Run-of-river, B12=Hydro Water Reservoir, B16=Solar, B17=Waste, B18=Wind Onshore, B19=Wind Offshore, B20=Other",
   "timestamp": "2024-01-15T10:00:00Z",
   "generation_mw": {
-    "B01": 120,
-    "B04": 850,
-    "B10": 4200,
-    "B11": 1100,
-    "B16": 200,
-    "B18": 280,
-    "B20": 80
+    "B01": 0,
+    "B04": 0,
+    "B11": 1,
+    "B12": 0,
+    "B16": 0,
+    "B18": 0,
+    "B20": 0
   },
   "pumped_storage_mw": {
-    "generating": 600,
+    "generating": 0,
     "pumping": 0
   },
   "cross_border_mw": {
